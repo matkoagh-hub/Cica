@@ -133,36 +133,91 @@ def get_select_options(page, selector):
         return []
 
 
+def get_dropdown_signature(page, selector):
+    """Vráti hash zoznamu options, takže zmenu dropdownu vieme detekovať."""
+    if not selector:
+        return None
+    try:
+        return page.eval_on_selector(
+            selector,
+            """sel => Array.from(sel.options).map(o => o.value + '|' + o.text).join('||')"""
+        )
+    except Exception:
+        return None
+
+
+def get_selected_value(page, selector):
+    if not selector:
+        return None
+    try:
+        return page.eval_on_selector(selector, "sel => sel.value")
+    except Exception:
+        return None
+
+
+def get_element_id(page, selector):
+    """Získa skutočné DOM id z CSS selectoru."""
+    try:
+        return page.eval_on_selector(selector, "sel => sel.id || sel.name")
+    except Exception:
+        return None
+
+
 def select_and_wait(page, selector, value, expect_child_selector=None):
     """
-    Vyberie hodnotu v selecte. Podporuje:
-    - AJAX postback (čakáme na networkidle)
-    - Full page reload (čakáme na load)
-    - Čakanie kým child dropdown sa naplní
+    Vyberie hodnotu v selecte a vynúti ASP.NET postback.
+    Ak je daný child selector, čaká kým sa zoznam options child dropdownu zmení.
     """
+    pre_sig = get_dropdown_signature(page, expect_child_selector) if expect_child_selector else None
+    cur_value = get_selected_value(page, selector)
+
+    # Nastav hodnotu cez Playwright (firne change event)
     page.select_option(selector, value)
 
-    # Pokus o explicitné dispatchnutie change eventu
-    try:
-        page.dispatch_event(selector, "change")
-    except Exception:
-        pass
+    # Vynúti ASP.NET __doPostBack — toto je čo onchange handler robí.
+    # Funguje aj keď je nová hodnota rovnaká ako aktuálna.
+    elem_id = get_element_id(page, selector)
+    if elem_id:
+        try:
+            page.evaluate(
+                f"""() => {{
+                    if (typeof __doPostBack === 'function') {{
+                        __doPostBack('{elem_id}', '');
+                    }}
+                }}"""
+            )
+        except Exception as e:
+            log.debug("__doPostBack zlyhal: %s", e)
 
-    # Čakaj buď na navigation alebo na networkidle
-    try:
-        page.wait_for_load_state("domcontentloaded", timeout=10000)
-    except PlaywrightTimeout:
-        pass
     try:
         page.wait_for_load_state("networkidle", timeout=10000)
     except PlaywrightTimeout:
         pass
 
+    # Počkaj kým sa child dropdown skutočne zmení (signature sa líši)
+    if expect_child_selector and pre_sig is not None:
+        try:
+            page.wait_for_function(
+                """([sel, prev]) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return false;
+                    const sig = Array.from(el.options).map(o => o.value + '|' + o.text).join('||');
+                    return sig !== prev;
+                }""",
+                arg=[expect_child_selector, pre_sig],
+                timeout=12000,
+            )
+        except PlaywrightTimeout:
+            log.debug("Child %s sa nezmenil (možno už mal správny obsah)",
+                      expect_child_selector)
+
     time.sleep(DELAY)
 
-    # Ak vieme aký child selector sa má naplniť, počkajme na to
-    if expect_child_selector:
-        wait_for_options(page, expect_child_selector, timeout=10000)
+    # Diagnostika: skontroluj že sa hodnota skutočne nastavila
+    new_value = get_selected_value(page, selector)
+    if new_value != value:
+        log.warning("Hodnota sa nenastavila! Chcel: %r, Aktuálne: %r (predtým: %r)",
+                    value, new_value, cur_value)
 
 
 def wait_for_options(page, selector, timeout=10000):
