@@ -195,28 +195,69 @@ def run_scraper():
         writer.writeheader()
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="sk-SK",
-            timezone_id="Europe/Bratislava",
-        )
-        page = context.new_page()
-        _apply_stealth(page)  # maskuje Playwright pred botdetekciou
+        # Persistent kontext + skutočný Chrome (channel="chrome") = obchádza WAF
+        user_data = str(Path.home() / ".cica_scraper_profile")
+        Path(user_data).mkdir(exist_ok=True)
+
+        try:
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=user_data,
+                channel="chrome",  # skutočný nainštalovaný Chrome
+                headless=False,
+                viewport={"width": 1280, "height": 800},
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                locale="sk-SK",
+                timezone_id="Europe/Bratislava",
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                ],
+                ignore_default_args=["--enable-automation"],
+            )
+        except Exception as e:
+            log.warning("Chrome channel nedostupný (%s), používam Chromium", e)
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=user_data,
+                headless=False,
+                viewport={"width": 1280, "height": 800},
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                locale="sk-SK",
+                timezone_id="Europe/Bratislava",
+                args=["--disable-blink-features=AutomationControlled"],
+                ignore_default_args=["--enable-automation"],
+            )
+
+        page = context.pages[0] if context.pages else context.new_page()
+        _apply_stealth(page)
         page.set_default_timeout(20000)
+        browser = context.browser  # pre kompatibilitu s neskorším browser.close()
 
         log.info("Otváram stránku: %s", BASE_URL)
         page.goto(BASE_URL)
         page.wait_for_load_state("networkidle")
         time.sleep(3)  # extra čas pre JS
+
+        # Ak WAF zablokoval — počkaj na používateľa
+        body_check = page.inner_text("body")[:500].lower()
+        if "rejected" in body_check or "support id" in body_check or "administrator" in body_check:
+            log.warning("=" * 70)
+            log.warning("WAF zablokoval prístup. RUČNE v okne prehliadača:")
+            log.warning("  1. Klikni Go Back alebo refresh (Cmd+R)")
+            log.warning("  2. Ak treba, vyrieš CAPTCHA")
+            log.warning("  3. Klikni na 'vlastník' aby sa zobrazil formulár")
+            log.warning("  4. Keď vidíš dropdown 'okres', stlač Enter v termináli")
+            log.warning("=" * 70)
+            input(">>> Stlač Enter keď je formulár zobrazený... ")
+            page.wait_for_load_state("networkidle")
+            time.sleep(2)
 
         # Screenshot pre diagnostiku
         page.screenshot(path="debug_screenshot.png", full_page=True)
@@ -312,7 +353,7 @@ def run_scraper():
 
         if not sel_okres:
             log.error("Nepodarilo sa nájsť dropdown Okres. Skript končí.")
-            browser.close()
+            context.close()
             conn.close()
             csv_fh.close()
             return
@@ -429,7 +470,7 @@ def run_scraper():
         except KeyboardInterrupt:
             log.info("Prerušené (Ctrl+C). Progress uložený.")
 
-        browser.close()
+        context.close()
 
     conn.close()
     csv_fh.close()
