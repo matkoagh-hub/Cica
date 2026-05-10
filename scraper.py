@@ -290,19 +290,34 @@ def run_scraper():
         page.wait_for_load_state("networkidle")
         time.sleep(3)  # extra čas pre JS
 
-        # Ak WAF zablokoval — počkaj na používateľa
-        body_check = page.inner_text("body")[:500].lower()
-        if "rejected" in body_check or "support id" in body_check or "administrator" in body_check:
+        def has_form_ready():
+            """True ak stránka má aspoň jeden select s možnosťami (formulár je zobrazený)."""
+            try:
+                count = page.eval_on_selector_all(
+                    "select",
+                    "sels => sels.filter(s => s.options.length > 1).length"
+                )
+                return count > 0
+            except Exception:
+                return False
+
+        # Ak nie je vidieť formulár → manuálny režim
+        if not has_form_ready():
             log.warning("=" * 70)
-            log.warning("WAF zablokoval prístup. RUČNE v okne prehliadača:")
-            log.warning("  1. Klikni Go Back alebo refresh (Cmd+R)")
-            log.warning("  2. Ak treba, vyrieš CAPTCHA")
-            log.warning("  3. Klikni na 'vlastník' aby sa zobrazil formulár")
-            log.warning("  4. Keď vidíš dropdown 'okres', stlač Enter v termináli")
+            log.warning("FORMULÁR NIE JE VIDITEĽNÝ (WAF blok alebo iná stránka).")
+            log.warning("RUČNE v okne prehliadača:")
+            log.warning("  1. Ak vidíš WAF blok, klikni 'Go Back' alebo refresh (Cmd+R)")
+            log.warning("  2. Klikni na možnosť 'vlastník' (nie 'správca')")
+            log.warning("  3. Počkaj kým sa zobrazia dropdowny okres, kat. územie, atď.")
+            log.warning("  4. Potom v termináli stlač Enter")
             log.warning("=" * 70)
-            input(">>> Stlač Enter keď je formulár zobrazený... ")
-            page.wait_for_load_state("networkidle")
-            time.sleep(2)
+            while True:
+                input(">>> Stlač Enter keď vidíš formulár s dropdownmi... ")
+                time.sleep(1)
+                if has_form_ready():
+                    log.info("Formulár nájdený, pokračujem.")
+                    break
+                log.warning("Stále nevidím dropdowny. Skús to ešte raz.")
 
         # Screenshot pre diagnostiku
         page.screenshot(path="debug_screenshot.png", full_page=True)
