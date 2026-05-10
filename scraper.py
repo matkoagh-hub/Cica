@@ -143,6 +143,24 @@ def select_and_wait(page, selector, value):
     time.sleep(DELAY)
 
 
+def wait_for_options(page, selector, timeout=10000):
+    """Počká kým daný select dropdown má aspoň jednu reálnu (non-empty) možnosť."""
+    if not selector:
+        return
+    try:
+        page.wait_for_function(
+            """([sel]) => {
+                const el = document.querySelector(sel);
+                if (!el) return false;
+                return Array.from(el.options).filter(o => o.value.trim() !== '').length > 0;
+            }""",
+            arg=[selector],
+            timeout=timeout,
+        )
+    except PlaywrightTimeout:
+        log.warning("Timeout pri čakaní na možnosti v %s", selector)
+
+
 def get_input_value(page, selector):
     """Bezpečne prečíta hodnotu textového poľa."""
     try:
@@ -317,6 +335,7 @@ def run_scraper():
                     log.warning("  Nenašiel som dropdown kat. územia")
                     continue
 
+                wait_for_options(page, kat_sel)
                 katy = get_select_options(page, kat_sel)
                 log.info("  Nájdených %d katastrálnych území", len(katy))
                 if not katy:
@@ -336,6 +355,7 @@ def run_scraper():
                         log.warning("    Nenašiel som dropdown písmena")
                         continue
 
+                    wait_for_options(page, pism_sel)
                     pismena = get_select_options(page, pism_sel)
                     log.info("    Nájdených %d písmen", len(pismena))
                     if not pismena:
@@ -353,6 +373,7 @@ def run_scraper():
                             log.info("      Žiadny dropdown priezviska")
                             continue
 
+                        wait_for_options(page, priezv_sel, timeout=5000)
                         priezviska_opts = get_select_options(page, priezv_sel)
                         log.info("      Nájdených %d priezvísk pre písmeno %s",
                                  len(priezviska_opts), pism_name)
@@ -376,9 +397,9 @@ def run_scraper():
 
                             vlastnici = []
                             if vl_sel and vl_sel.startswith("select"):
+                                wait_for_options(page, vl_sel, timeout=5000)
                                 vlastnici = get_select_options(page, vl_sel)
                             elif vl_sel:
-                                # fallback: ak je to input, prečítaj jednu hodnotu
                                 v = get_input_value(page, vl_sel)
                                 if v:
                                     vlastnici = [(v, v)]
