@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from playwright_stealth import stealth_sync
 
 BASE_URL = "https://cica.vugk.sk/VL_vyber.aspx"
 DB_PATH = "owners.db"
@@ -152,8 +153,22 @@ def run_scraper():
         writer.writeheader()
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)  # viditeľný prehliadač
-        page = browser.new_page()
+        browser = pw.chromium.launch(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="sk-SK",
+            timezone_id="Europe/Bratislava",
+        )
+        page = context.new_page()
+        stealth_sync(page)  # maskuje Playwright pred botdetekciou
         page.set_default_timeout(20000)
 
         log.info("Otváram stránku: %s", BASE_URL)
