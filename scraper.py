@@ -18,7 +18,13 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-from playwright_stealth import stealth_sync
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    try:
+        from playwright_stealth import stealth as stealth_sync
+    except ImportError:
+        stealth_sync = lambda page: None  # fallback ak knižnica nemá stealth
 
 BASE_URL = "https://cica.vugk.sk/VL_vyber.aspx"
 DB_PATH = "owners.db"
