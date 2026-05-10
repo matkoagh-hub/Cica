@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
+from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -125,7 +126,7 @@ def get_text_field(soup: BeautifulSoup, field_id: str) -> str:
     return ""
 
 
-def do_request(session: requests.Session, payload: dict, retries: int = 3) -> BeautifulSoup | None:
+def do_request(session: requests.Session, payload: dict, retries: int = 3) -> Optional[BeautifulSoup]:
     for attempt in range(1, retries + 1):
         try:
             resp = session.post(BASE_URL, data=payload, headers=HEADERS, timeout=30)
