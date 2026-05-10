@@ -269,9 +269,11 @@ def run_scraper():
             "select[name*='Priezv' i]", "select[id*='Priezv' i]",
             "select[name*='Surname' i]",
         ])
+        # Vlastník je DROPDOWN (select), nie textové pole
         sel_vlastnik = find_selector(page, [
+            "select[name*='Vlastnik' i]", "select[id*='Vlastnik' i]",
+            "select[name*='ddlVlastnik']", "select[id*='ddlVlastnik']",
             "input[name*='Vlastnik' i]", "input[id*='Vlastnik' i]",
-            "input[name*='txtVlastnik']", "input[id*='txtVlastnik']",
         ])
         sel_obec = find_selector(page, [
             "input[name*='Obec' i]", "input[id*='Obec' i]",
@@ -302,83 +304,97 @@ def run_scraper():
         log.info("Nájdených %d okresov", len(okresy))
 
         try:
+            # ===== OKRES =====
             for okres_val, okres_name in okresy:
                 log.info("=== OKRES: %s ===", okres_name)
                 select_and_wait(page, sel_okres, okres_val)
 
-                # Znovu nájdi kat. územie selector (stránka sa mohla zmeniť)
-                kat_sel = sel_kat or find_selector(page, [
+                kat_sel = find_selector(page, [
                     "select[name*='Katastr' i]", "select[id*='Katastr' i]",
                     "select[name*='Uzem' i]", "select[id*='Uzem' i]",
-                ])
+                ]) or sel_kat
                 if not kat_sel:
-                    log.warning("  Nenašiel som selector pre kat. územie")
+                    log.warning("  Nenašiel som dropdown kat. územia")
                     continue
 
                 katy = get_select_options(page, kat_sel)
+                log.info("  Nájdených %d katastrálnych území", len(katy))
                 if not katy:
-                    log.warning("  Žiadne katastrálne územia")
                     continue
 
+                # ===== KAT. ÚZEMIE =====
                 for kat_val, kat_name in katy:
-                    log.info("  KAT: %s", kat_name)
-                    select_and_wait(page, sel_okres, okres_val)
+                    log.info("  KAT.ÚZEMIE: %s", kat_name)
                     select_and_wait(page, kat_sel, kat_val)
 
                     obec = get_input_value(page, sel_obec) if sel_obec else ""
 
-                    pism_sel = sel_pismeno or find_selector(page, [
+                    pism_sel = find_selector(page, [
                         "select[name*='Pismen' i]", "select[id*='Pismen' i]",
-                    ])
+                    ]) or sel_pismeno
                     if not pism_sel:
-                        log.warning("    Nenašiel som selector pre písmeno")
+                        log.warning("    Nenašiel som dropdown písmena")
                         continue
 
                     pismena = get_select_options(page, pism_sel)
+                    log.info("    Nájdených %d písmen", len(pismena))
                     if not pismena:
-                        log.warning("    Žiadne písmená")
                         continue
 
+                    # ===== PRVÉ PÍSMENO =====
                     for pism_val, pism_name in pismena:
                         log.info("    PÍSMENO: %s", pism_name)
-                        select_and_wait(page, sel_okres, okres_val)
-                        select_and_wait(page, kat_sel, kat_val)
                         select_and_wait(page, pism_sel, pism_val)
 
-                        priezv_sel = sel_priezvisko or find_selector(page, [
+                        priezv_sel = find_selector(page, [
                             "select[name*='Priezv' i]", "select[id*='Priezv' i]",
-                        ])
+                        ]) or sel_priezvisko
                         if not priezv_sel:
-                            log.info("      Žiadny selector pre priezvisko")
+                            log.info("      Žiadny dropdown priezviska")
                             continue
 
-                        priezviска = get_select_options(page, priezv_sel)
-                        if not priezviска:
-                            log.info("      Žiadne priezviská pre %s", pism_name)
+                        priezviska_opts = get_select_options(page, priezv_sel)
+                        log.info("      Nájdených %d priezvísk pre písmeno %s",
+                                 len(priezviska_opts), pism_name)
+                        if not priezviska_opts:
                             continue
 
-                        for priezv_val, priezv_name in priezviска:
+                        # ===== PRIEZVISKO =====
+                        for priezv_val, priezv_name in priezviska_opts:
                             if is_done(conn, okres_name, kat_name, pism_name, priezv_name):
+                                log.debug("      SKIP (hotové): %s", priezv_name)
                                 continue
 
-                            select_and_wait(page, sel_okres, okres_val)
-                            select_and_wait(page, kat_sel, kat_val)
-                            select_and_wait(page, pism_sel, pism_val)
+                            log.info("      PRIEZVISKO: %s", priezv_name)
                             select_and_wait(page, priezv_sel, priezv_val)
 
-                            vlastnik_val = ""
-                            if sel_vlastnik:
-                                vlastnik_val = get_input_value(page, sel_vlastnik)
+                            # ===== VLASTNÍK (dropdown so všetkými ľuďmi) =====
+                            vl_sel = find_selector(page, [
+                                "select[name*='Vlastnik' i]", "select[id*='Vlastnik' i]",
+                                "select[name*='ddlVlastnik']",
+                            ]) or sel_vlastnik
 
-                            if vlastnik_val:
-                                log.info("      %s → %s", priezv_name, vlastnik_val)
-                                save_owner(conn, writer, vlastnik_val, obec, okres_name, kat_name)
-                            else:
-                                log.warning("      %s → vlastník nenájdený", priezv_name)
+                            vlastnici = []
+                            if vl_sel and vl_sel.startswith("select"):
+                                vlastnici = get_select_options(page, vl_sel)
+                            elif vl_sel:
+                                # fallback: ak je to input, prečítaj jednu hodnotu
+                                v = get_input_value(page, vl_sel)
+                                if v:
+                                    vlastnici = [(v, v)]
+
+                            log.info("        → %d vlastníkov", len(vlastnici))
+
+                            for _, vlastnik_name in vlastnici:
+                                if vlastnik_name:
+                                    log.info("        ULOŽ: %s", vlastnik_name)
+                                    save_owner(conn, writer, vlastnik_name,
+                                               obec, okres_name, kat_name)
 
                             mark_done(conn, okres_name, kat_name, pism_name, priezv_name)
+                            time.sleep(0.3)
 
-                    time.sleep(2.0)
+                    time.sleep(1.0)
 
         except KeyboardInterrupt:
             log.info("Prerušené (Ctrl+C). Progress uložený.")
