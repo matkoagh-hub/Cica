@@ -152,13 +152,22 @@ def run_scraper():
         writer.writeheader()
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=False)  # viditeľný prehliadač
         page = browser.new_page()
         page.set_default_timeout(20000)
 
         log.info("Otváram stránku: %s", BASE_URL)
         page.goto(BASE_URL)
         page.wait_for_load_state("networkidle")
+        time.sleep(3)  # extra čas pre JS
+
+        # Screenshot pre diagnostiku
+        page.screenshot(path="debug_screenshot.png", full_page=True)
+        log.info("Screenshot uložený do debug_screenshot.png")
+
+        # Vypíš celý text stránky pre diagnostiku
+        body_text = page.inner_text("body")[:500]
+        log.info("Text stránky (prvých 500 znakov): %s", body_text)
 
         # --- Krok 1: Kliknúť na "vlastník" ---
         log.info("Hľadám výber vlastník / správca...")
