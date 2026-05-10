@@ -223,6 +223,52 @@ def build_payload(hidden: Dict, event_target: str, extra: Dict) -> Dict:
     return payload
 
 
+def select_vlastnik_type(session: requests.Session, soup: BeautifulSoup) -> BeautifulSoup:
+    """
+    Stránka môže mať na začiatku výber typu: vlastník / správca.
+    Nájde radio button alebo link pre 'vlastník' a klikne naň cez postback.
+    Vráti aktualizovanú soup (s formulárom pre vlastníka).
+    """
+    hidden = parse_hidden(soup)
+
+    # Hľadáme radio buttony
+    radios = soup.find_all("input", {"type": "radio"})
+    log.info("DEBUG: Nájdených %d radio buttonov", len(radios))
+    for r in radios:
+        rval = r.get("value", "").lower()
+        rname = r.get("name", "")
+        rid = r.get("id", "").lower()
+        log.info("  RADIO name='%s' id='%s' value='%s'", rname, rid, rval)
+        if any(k in rval or k in rid for k in ["vlastn", "owner", "vl"]):
+            log.info("Vyberám typ 'vlastník': name='%s' value='%s'", rname, r.get("value", ""))
+            payload = {**hidden, "__EVENTTARGET": rname, "__EVENTARGUMENT": "", rname: r.get("value", "")}
+            result = do_request(session, payload)
+            if result:
+                with open(DEBUG_HTML, "wb") as f:
+                    f.write(result.encode() if isinstance(result, str) else b"")
+                return result
+
+    # Hľadáme linky / buttony s textom "vlastník"
+    for tag in soup.find_all(["a", "button", "input"]):
+        text = tag.get_text(strip=True).lower()
+        href = tag.get("href", "")
+        onclick = tag.get("onclick", "")
+        if "vlastn" in text or "vlastn" in onclick.lower():
+            log.info("Nájdený link/button pre vlastníka: '%s'", tag.get_text(strip=True))
+            # Skúsime extrahovať __doPostBack parametre
+            import re
+            match = re.search(r"__doPostBack\('([^']+)','([^']*)'\)", onclick)
+            if match:
+                target, argument = match.group(1), match.group(2)
+                payload = {**hidden, "__EVENTTARGET": target, "__EVENTARGUMENT": argument}
+                result = do_request(session, payload)
+                if result:
+                    return result
+
+    log.info("Výber vlastník/správca nenájdený — pokračujem s aktuálnou stránkou")
+    return soup
+
+
 def run_scraper() -> None:
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -245,6 +291,10 @@ def run_scraper() -> None:
     soup = BeautifulSoup(resp.content, "lxml")
     title = soup.find("title")
     log.info("Nadpis stránky: %s", title.get_text(strip=True) if title else "N/A")
+
+    # Vyber typ "vlastník" ak stránka vyžaduje výber vlastník/správca
+    soup = select_vlastnik_type(session, soup)
+    time.sleep(DELAY)
 
     field_ids = discover_field_ids(soup)
 
