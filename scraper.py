@@ -323,8 +323,10 @@ def run_scraper():
 
         try:
             # ===== OKRES =====
-            for okres_val, okres_name in okresy:
-                log.info("=== OKRES: %s ===", okres_name)
+            log.info(">>> Začínam od prvého okresu: %s (%d celkom)",
+                     okresy[0][1] if okresy else "?", len(okresy))
+            for i_okres, (okres_val, okres_name) in enumerate(okresy, 1):
+                log.info("=== OKRES [%d/%d]: %s ===", i_okres, len(okresy), okres_name)
                 select_and_wait(page, sel_okres, okres_val)
 
                 kat_sel = find_selector(page, [
@@ -342,8 +344,10 @@ def run_scraper():
                     continue
 
                 # ===== KAT. ÚZEMIE =====
-                for kat_val, kat_name in katy:
-                    log.info("  KAT.ÚZEMIE: %s", kat_name)
+                log.info("  >>> Začínam od prvého kat. územia: %s (%d celkom)",
+                         katy[0][1], len(katy))
+                for i_kat, (kat_val, kat_name) in enumerate(katy, 1):
+                    log.info("  KAT.ÚZEMIE [%d/%d]: %s", i_kat, len(katy), kat_name)
                     select_and_wait(page, kat_sel, kat_val)
 
                     obec = get_input_value(page, sel_obec) if sel_obec else ""
@@ -362,8 +366,10 @@ def run_scraper():
                         continue
 
                     # ===== PRVÉ PÍSMENO =====
-                    for pism_val, pism_name in pismena:
-                        log.info("    PÍSMENO: %s", pism_name)
+                    log.info("    >>> Začínam od prvého písmena: %s (%d celkom)",
+                             pismena[0][1], len(pismena))
+                    for i_pism, (pism_val, pism_name) in enumerate(pismena, 1):
+                        log.info("    PÍSMENO [%d/%d]: %s", i_pism, len(pismena), pism_name)
                         select_and_wait(page, pism_sel, pism_val)
 
                         priezv_sel = find_selector(page, [
@@ -381,12 +387,15 @@ def run_scraper():
                             continue
 
                         # ===== PRIEZVISKO =====
-                        for priezv_val, priezv_name in priezviska_opts:
+                        log.info("      >>> Začínam od prvého priezviska: %s (%d celkom)",
+                                 priezviska_opts[0][1], len(priezviska_opts))
+                        for i_pr, (priezv_val, priezv_name) in enumerate(priezviska_opts, 1):
                             if is_done(conn, okres_name, kat_name, pism_name, priezv_name):
                                 log.debug("      SKIP (hotové): %s", priezv_name)
                                 continue
 
-                            log.info("      PRIEZVISKO: %s", priezv_name)
+                            log.info("      PRIEZVISKO [%d/%d]: %s",
+                                     i_pr, len(priezviska_opts), priezv_name)
                             select_and_wait(page, priezv_sel, priezv_val)
 
                             # ===== VLASTNÍK (dropdown so všetkými ľuďmi) =====
