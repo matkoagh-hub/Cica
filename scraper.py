@@ -369,35 +369,13 @@ def run_scraper():
         )
         log.info("Nájdené selecty: %s", all_selects)
 
-        # Nájdi selector pre Okres
-        sel_okres = find_selector(page, [
-            "select[name*='Okres' i]", "select[id*='Okres' i]",
-            "select[name*='ddlOkres']", "select[id*='ddlOkres']",
-        ])
-        sel_kat = find_selector(page, [
-            "select[name*='Katastr' i]", "select[id*='Katastr' i]",
-            "select[name*='KatastrUzem']", "select[id*='ddlKatastr']",
-            "select[name*='Uzem' i]", "select[id*='Uzem' i]",
-        ])
-        sel_pismeno = find_selector(page, [
-            "select[name*='Pismen' i]", "select[id*='Pismen' i]",
-            "select[name*='Prvé' i]", "select[id*='Prve' i]",
-            "select[name*='Letter' i]",
-        ])
-        sel_priezvisko = find_selector(page, [
-            "select[name*='Priezv' i]", "select[id*='Priezv' i]",
-            "select[name*='Surname' i]",
-        ])
-        # Vlastník je DROPDOWN (select), nie textové pole
-        sel_vlastnik = find_selector(page, [
-            "select[name*='Vlastnik' i]", "select[id*='Vlastnik' i]",
-            "select[name*='ddlVlastnik']", "select[id*='ddlVlastnik']",
-            "input[name*='Vlastnik' i]", "input[id*='Vlastnik' i]",
-        ])
-        sel_obec = find_selector(page, [
-            "input[name*='Obec' i]", "input[id*='Obec' i]",
-            "input[name*='txtObec']",
-        ])
+        # PEVNÉ ID dropdownov objavené z DOM-u stránky
+        sel_okres = "select#DropDownList_okres"
+        sel_kat = "select#DropDownList_ku"
+        sel_pismeno = "select#DropDownList_ABC"
+        sel_priezvisko = "select#DropDownList_VL_PRI"
+        sel_vlastnik = "select#DropDownList_VL"
+        sel_obec = "select#DropDownList_obec"
 
         log.info("Polia: okres=%s kat=%s pismeno=%s priezvisko=%s vlastnik=%s obec=%s",
                  sel_okres, sel_kat, sel_pismeno, sel_priezvisko, sel_vlastnik, sel_obec)
@@ -428,100 +406,67 @@ def run_scraper():
                      okresy[0][1] if okresy else "?", len(okresy))
             for i_okres, (okres_val, okres_name) in enumerate(okresy, 1):
                 log.info("=== OKRES [%d/%d]: %s ===", i_okres, len(okresy), okres_name)
-
-                # Identifikuj kat_sel ešte pred zmenou aby sme naň mohli čakať
-                kat_sel_pre = find_selector(page, [
-                    "select[name*='Katastr' i]", "select[id*='Katastr' i]",
-                    "select[name*='Uzem' i]", "select[id*='Uzem' i]",
-                ]) or sel_kat
-
                 select_and_wait(page, sel_okres, okres_val,
-                                expect_child_selector=kat_sel_pre)
-
-                kat_sel = find_selector(page, [
-                    "select[name*='Katastr' i]", "select[id*='Katastr' i]",
-                    "select[name*='Uzem' i]", "select[id*='Uzem' i]",
-                ]) or sel_kat
-                if not kat_sel:
-                    log.warning("  Nenašiel som dropdown kat. územia")
-                    continue
-
-                debug_dropdown(page, kat_sel, "kat_uzemie po výbere okresu")
-                wait_for_options(page, kat_sel)
-                katy = get_select_options(page, kat_sel)
+                                expect_child_selector=sel_kat)
+                debug_dropdown(page, sel_kat, "kat_uzemie po výbere okresu")
+                katy = get_select_options(page, sel_kat)
                 log.info("  Nájdených %d katastrálnych území", len(katy))
                 if not katy:
                     continue
 
                 # ===== KAT. ÚZEMIE =====
+                if not katy:
+                    log.warning("  Žiadne kat. územia, preskakujem okres")
+                    continue
                 log.info("  >>> Začínam od prvého kat. územia: %s (%d celkom)",
                          katy[0][1], len(katy))
                 for i_kat, (kat_val, kat_name) in enumerate(katy, 1):
                     log.info("  KAT.ÚZEMIE [%d/%d]: %s", i_kat, len(katy), kat_name)
-                    select_and_wait(page, kat_sel, kat_val)
+                    select_and_wait(page, sel_kat, kat_val,
+                                    expect_child_selector=sel_pismeno)
 
-                    obec = get_input_value(page, sel_obec) if sel_obec else ""
+                    # Obec je dropdown s 1 možnosťou (auto-naplnená)
+                    obec_opts = get_select_options(page, sel_obec)
+                    obec = obec_opts[0][1] if obec_opts else ""
 
-                    pism_sel = find_selector(page, [
-                        "select[name*='Pismen' i]", "select[id*='Pismen' i]",
-                    ]) or sel_pismeno
-                    if not pism_sel:
-                        log.warning("    Nenašiel som dropdown písmena")
-                        continue
-
-                    wait_for_options(page, pism_sel)
-                    pismena = get_select_options(page, pism_sel)
+                    pismena = get_select_options(page, sel_pismeno)
                     log.info("    Nájdených %d písmen", len(pismena))
                     if not pismena:
                         continue
 
                     # ===== PRVÉ PÍSMENO =====
+                    if not pismena:
+                        log.warning("    Žiadne písmená")
+                        continue
                     log.info("    >>> Začínam od prvého písmena: %s (%d celkom)",
                              pismena[0][1], len(pismena))
                     for i_pism, (pism_val, pism_name) in enumerate(pismena, 1):
                         log.info("    PÍSMENO [%d/%d]: %s", i_pism, len(pismena), pism_name)
-                        select_and_wait(page, pism_sel, pism_val)
+                        select_and_wait(page, sel_pismeno, pism_val,
+                                        expect_child_selector=sel_priezvisko)
 
-                        priezv_sel = find_selector(page, [
-                            "select[name*='Priezv' i]", "select[id*='Priezv' i]",
-                        ]) or sel_priezvisko
-                        if not priezv_sel:
-                            log.info("      Žiadny dropdown priezviska")
-                            continue
-
-                        wait_for_options(page, priezv_sel, timeout=5000)
-                        priezviska_opts = get_select_options(page, priezv_sel)
+                        priezviska_opts = get_select_options(page, sel_priezvisko)
                         log.info("      Nájdených %d priezvísk pre písmeno %s",
                                  len(priezviska_opts), pism_name)
                         if not priezviska_opts:
                             continue
 
                         # ===== PRIEZVISKO =====
+                        if not priezviska_opts:
+                            continue
                         log.info("      >>> Začínam od prvého priezviska: %s (%d celkom)",
                                  priezviska_opts[0][1], len(priezviska_opts))
                         for i_pr, (priezv_val, priezv_name) in enumerate(priezviska_opts, 1):
                             if is_done(conn, okres_name, kat_name, pism_name, priezv_name):
-                                log.debug("      SKIP (hotové): %s", priezv_name)
                                 continue
 
                             log.info("      PRIEZVISKO [%d/%d]: %s",
                                      i_pr, len(priezviska_opts), priezv_name)
-                            select_and_wait(page, priezv_sel, priezv_val)
+                            select_and_wait(page, sel_priezvisko, priezv_val,
+                                            expect_child_selector=sel_vlastnik)
 
                             # ===== VLASTNÍK (dropdown so všetkými ľuďmi) =====
-                            vl_sel = find_selector(page, [
-                                "select[name*='Vlastnik' i]", "select[id*='Vlastnik' i]",
-                                "select[name*='ddlVlastnik']",
-                            ]) or sel_vlastnik
-
-                            vlastnici = []
-                            if vl_sel and vl_sel.startswith("select"):
-                                wait_for_options(page, vl_sel, timeout=5000)
-                                vlastnici = get_select_options(page, vl_sel)
-                            elif vl_sel:
-                                v = get_input_value(page, vl_sel)
-                                if v:
-                                    vlastnici = [(v, v)]
+                            vlastnici = get_select_options(page, sel_vlastnik)
 
                             log.info("        → %d vlastníkov", len(vlastnici))
 
