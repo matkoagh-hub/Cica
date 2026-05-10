@@ -11,7 +11,7 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -20,6 +20,7 @@ BASE_URL = "https://cica.vugk.sk/VL_vyber.aspx"
 DB_PATH = "owners.db"
 CSV_PATH = "owners.csv"
 LOG_PATH = "scraper.log"
+DEBUG_HTML = "debug_page.html"
 DELAY = 1.2  # sekundy medzi requestmi
 
 HEADERS = {
@@ -97,7 +98,7 @@ def save_owner(conn: sqlite3.Connection, writer: csv.DictWriter, vlastnik: str, 
         log.error("DB chyba pri ukladaní '%s': %s", vlastnik, e)
 
 
-def parse_hidden(soup: BeautifulSoup) -> dict:
+def parse_hidden(soup: BeautifulSoup) -> Dict[str, str]:
     hidden = {}
     for name in ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION", "__EVENTTARGET", "__EVENTARGUMENT"):
         tag = soup.find("input", {"name": name})
@@ -105,7 +106,7 @@ def parse_hidden(soup: BeautifulSoup) -> dict:
     return hidden
 
 
-def select_options(soup: BeautifulSoup, select_id: str) -> list[tuple[str, str]]:
+def select_options(soup: BeautifulSoup, select_id: str) -> List[Tuple[str, str]]:
     sel = soup.find("select", {"id": select_id}) or soup.find("select", {"name": select_id})
     if not sel:
         return []
@@ -126,7 +127,7 @@ def get_text_field(soup: BeautifulSoup, field_id: str) -> str:
     return ""
 
 
-def do_request(session: requests.Session, payload: dict, retries: int = 3) -> Optional[BeautifulSoup]:
+def do_request(session: requests.Session, payload: Dict, retries: int = 3) -> Optional[BeautifulSoup]:
     for attempt in range(1, retries + 1):
         try:
             resp = session.post(BASE_URL, data=payload, headers=HEADERS, timeout=30)
@@ -137,40 +138,86 @@ def do_request(session: requests.Session, payload: dict, retries: int = 3) -> Op
             log.warning("Pokus %d/%d zlyhal: %s — čakám %ds", attempt, retries, e, wait)
             if attempt < retries:
                 time.sleep(wait)
-    log.error("Všetky pokusy zlyhali pre payload: %s", {k: v for k, v in payload.items() if not k.startswith("__VIEW")})
+    log.error("Všetky pokusy zlyhali")
     return None
 
 
-def discover_field_ids(soup: BeautifulSoup) -> dict:
-    """Nájde skutočné ID/name atribúty formulárových polí."""
-    ids = {}
-    for sel in soup.find_all("select"):
-        name = sel.get("name", "") or sel.get("id", "")
-        text_above = sel.find_previous(["label", "td", "th", "span"])
-        label = text_above.get_text(strip=True).lower() if text_above else ""
-        if "okres" in label and "kat" not in label:
-            ids["okres"] = name
-        elif "katastr" in label:
-            ids["kat_uzemie"] = name
-        elif "písmen" in label or "pismen" in label:
-            ids["pismeno"] = name
-        elif "priezv" in label:
-            ids["priezvisko"] = name
+def debug_selects(soup: BeautifulSoup) -> None:
+    """Vypíše všetky select elementy nájdené na stránke pre diagnostiku."""
+    selects = soup.find_all("select")
+    log.info("=== DEBUG: Nájdených %d select elementov ===", len(selects))
+    for sel in selects:
+        sid = sel.get("id", "")
+        sname = sel.get("name", "")
+        opts = sel.find_all("option")
+        log.info("  SELECT id='%s' name='%s' — %d možností", sid, sname, len(opts))
+        if opts:
+            samples = [o.get_text(strip=True) for o in opts[:3]]
+            log.info("    Ukážka: %s", samples)
+    inputs = soup.find_all("input", {"type": ["text", "readonly"]})
+    log.info("=== DEBUG: Nájdených %d text input polí ===", len(inputs))
+    for inp in inputs:
+        log.info("  INPUT id='%s' name='%s' value='%s'",
+                 inp.get("id", ""), inp.get("name", ""), inp.get("value", "")[:50])
 
-    for inp in soup.find_all("input", {"type": ["text", "readonly"]}):
-        name = inp.get("name", "") or inp.get("id", "")
-        text_above = inp.find_previous(["label", "td", "th", "span"])
-        label = text_above.get_text(strip=True).lower() if text_above else ""
-        if "vlastn" in label and "číslo" not in label and "cislo" not in label:
-            ids["vlastnik"] = name
-        elif "obec" in label:
-            ids["obec"] = name
+
+def discover_field_ids(soup: BeautifulSoup) -> Dict[str, str]:
+    """Nájde skutočné ID/name atribúty formulárových polí."""
+    debug_selects(soup)
+
+    ids = {}
+    selects = soup.find_all("select")
+
+    for sel in selects:
+        sid = sel.get("id", "")
+        sname = sel.get("name", "")
+        name = sname or sid
+        sid_lower = sid.lower()
+        sname_lower = sname.lower()
+
+        # Hľadáme podľa ID/name atribútov
+        if any(k in sid_lower or k in sname_lower for k in ["okres", "district"]) and \
+           not any(k in sid_lower or k in sname_lower for k in ["kat", "uzem"]):
+            ids["okres"] = name
+        elif any(k in sid_lower or k in sname_lower for k in ["katastr", "uzem", "ku"]):
+            ids["kat_uzemie"] = name
+        elif any(k in sid_lower or k in sname_lower for k in ["pismen", "letter", "initial"]):
+            ids["pismeno"] = name
+        elif any(k in sid_lower or k in sname_lower for k in ["priezv", "surname", "lastname"]):
+            ids["priezvisko"] = name
+        elif any(k in sid_lower or k in sname_lower for k in ["lv", "list"]):
+            ids["lv"] = name
+
+        # Ak nenájdeme podľa ID, skúsime label
+        if not ids.get("okres"):
+            text_above = sel.find_previous(["label", "td", "th", "span", "div"])
+            label = text_above.get_text(strip=True).lower() if text_above else ""
+            if "okres" in label and "kat" not in label:
+                ids["okres"] = name
+            elif "katastr" in label:
+                ids["kat_uzemie"] = name
+            elif "písmen" in label or "pismen" in label:
+                ids["pismeno"] = name
+            elif "priezv" in label:
+                ids["priezvisko"] = name
+
+    for inp in soup.find_all("input"):
+        itype = inp.get("type", "text").lower()
+        if itype in ("hidden", "submit", "button", "checkbox", "radio"):
+            continue
+        iid = inp.get("id", "").lower()
+        iname = inp.get("name", "").lower()
+        fname = inp.get("name", "") or inp.get("id", "")
+        if any(k in iid or k in iname for k in ["vlastnik", "owner", "vlastn"]):
+            ids["vlastnik"] = fname
+        elif any(k in iid or k in iname for k in ["obec", "municip", "village"]):
+            ids["obec"] = fname
 
     log.info("Nájdené polia: %s", ids)
     return ids
 
 
-def build_payload(hidden: dict, event_target: str, extra: dict) -> dict:
+def build_payload(hidden: Dict, event_target: str, extra: Dict) -> Dict:
     payload = {**hidden, "__EVENTTARGET": event_target, "__EVENTARGUMENT": ""}
     payload.update(extra)
     return payload
@@ -185,14 +232,23 @@ def run_scraper() -> None:
     try:
         resp = session.get(BASE_URL, timeout=30)
         resp.raise_for_status()
+        log.info("HTTP status: %d, veľkosť odpovede: %d bajtov", resp.status_code, len(resp.content))
     except requests.RequestException as e:
         log.error("Nepodarilo sa načítať stránku: %s", e)
         return
 
+    # Uložiť HTML pre diagnostiku
+    with open(DEBUG_HTML, "wb") as f:
+        f.write(resp.content)
+    log.info("HTML uložený do %s — môžeš ho otvoriť v prehliadači pre kontrolu", DEBUG_HTML)
+
     soup = BeautifulSoup(resp.content, "lxml")
+    title = soup.find("title")
+    log.info("Nadpis stránky: %s", title.get_text(strip=True) if title else "N/A")
+
     field_ids = discover_field_ids(soup)
 
-    # Fallback na bežné ID/name hodnoty z ASP.NET WebForms
+    # Fallback na bežné ASP.NET WebForms ID pre tento portál
     fld_okres = field_ids.get("okres", "ctl00$ContentPlaceHolder1$ddlOkres")
     fld_kat = field_ids.get("kat_uzemie", "ctl00$ContentPlaceHolder1$ddlKatastrUzem")
     fld_pismeno = field_ids.get("pismeno", "ctl00$ContentPlaceHolder1$ddlPrvePismeno")
@@ -200,20 +256,32 @@ def run_scraper() -> None:
     fld_vlastnik = field_ids.get("vlastnik", "ctl00$ContentPlaceHolder1$txtVlastnik")
     fld_obec = field_ids.get("obec", "ctl00$ContentPlaceHolder1$txtObec")
 
+    log.info("Používam polia: okres='%s', kat='%s', pismeno='%s', priezvisko='%s'",
+             fld_okres, fld_kat, fld_pismeno, fld_priezvisko)
+
     okresy = select_options(soup, fld_okres)
     if not okresy:
-        # Skúsime alternatívne ID
+        # Skúsime nájsť najväčší select (pravdepodobne Okres)
+        best = None
+        best_count = 0
         for sel in soup.find_all("select"):
-            opts = select_options(soup, sel.get("name", "") or sel.get("id", ""))
-            if len(opts) > 5:
-                log.info("Nájdený select '%s' s %d možnosťami — pravdepodobne Okres",
-                         sel.get("name", ""), len(opts))
-                fld_okres = sel.get("name", "") or sel.get("id", "")
-                okresy = opts
-                break
+            sid = sel.get("name", "") or sel.get("id", "")
+            opts = [o for o in sel.find_all("option") if o.get("value", "").strip()]
+            if len(opts) > best_count:
+                best_count = len(opts)
+                best = sid
+        if best and best_count > 2:
+            log.info("Fallback: používam select '%s' s %d možnosťami ako Okres", best, best_count)
+            fld_okres = best
+            okresy = select_options(soup, fld_okres)
 
     if not okresy:
-        log.error("Nepodarilo sa nájsť dropdown Okres. Skontrolujte pripojenie a štruktúru stránky.")
+        log.error(
+            "Nepodarilo sa nájsť dropdown Okres.\n"
+            "Otvor súbor '%s' v prehliadači a skontroluj či sa stránka načítala správne.\n"
+            "Možné príčiny: server vrátil chybovú stránku, vyžaduje cookies, alebo zmenil štruktúru.",
+            DEBUG_HTML
+        )
         return
 
     log.info("Nájdených %d okresov.", len(okresy))
@@ -233,7 +301,6 @@ def run_scraper() -> None:
         for okres_val, okres_name in okresy:
             log.info("=== OKRES: %s ===", okres_name)
 
-            # --- Vyber okres ---
             payload = build_payload(hidden, fld_okres, {fld_okres: okres_val})
             soup2 = do_request(session, payload)
             if soup2 is None:
@@ -249,7 +316,6 @@ def run_scraper() -> None:
             for kat_val, kat_name in katy:
                 log.info("  KAT.ÚZEMIE: %s", kat_name)
 
-                # --- Vyber katastrálne územie ---
                 payload = build_payload(hidden, fld_kat, {
                     fld_okres: okres_val,
                     fld_kat: kat_val,
@@ -269,7 +335,6 @@ def run_scraper() -> None:
                 for pism_val, pism_name in pismena:
                     log.info("    PÍSMENO: %s", pism_name)
 
-                    # --- Vyber prvé písmeno ---
                     payload = build_payload(hidden, fld_pismeno, {
                         fld_okres: okres_val,
                         fld_kat: kat_val,
@@ -281,17 +346,16 @@ def run_scraper() -> None:
                     hidden = parse_hidden(soup4)
                     time.sleep(DELAY)
 
-                    priezviská = select_options(soup4, fld_priezvisko)
-                    if not priezviská:
+                    priezviска = select_options(soup4, fld_priezvisko)
+                    if not priezviска:
                         log.info("      Žiadne priezviská pre písmeno %s", pism_name)
                         continue
 
-                    for priezv_val, priezv_name in priezviská:
+                    for priezv_val, priezv_name in priezviска:
                         if is_done(conn, okres_name, kat_name, pism_name, priezv_name):
                             log.debug("      SKIP (hotové): %s", priezv_name)
                             continue
 
-                        # --- Vyber priezvisko ---
                         payload = build_payload(hidden, fld_priezvisko, {
                             fld_okres: okres_val,
                             fld_kat: kat_val,
@@ -313,7 +377,7 @@ def run_scraper() -> None:
 
                         mark_done(conn, okres_name, kat_name, pism_name, priezv_name)
 
-                time.sleep(2.0)  # pauza po každom kat. území
+                time.sleep(2.0)
 
     except KeyboardInterrupt:
         log.info("Skript prerušený (Ctrl+C). Progress je uložený, môžete pokračovať.")
