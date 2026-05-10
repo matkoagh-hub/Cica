@@ -327,37 +327,27 @@ def run_scraper():
         body_text = page.inner_text("body")[:500]
         log.info("Text stránky (prvých 500 znakov): %s", body_text)
 
-        # --- Krok 1: Kliknúť na "vlastník" ---
-        log.info("Hľadám výber vlastník / správca...")
-        vlastnik_clicked = False
-
-        # Skúsime rôzne spôsoby ako nájsť a kliknúť na "vlastník"
-        for locator_expr in [
-            "text=vlastník",
-            "text=Vlastník",
-            "text=VLASTNÍK",
-            "input[type=radio][value*='vlastn' i]",
-            "input[type=radio][id*='vlastn' i]",
-            "a:has-text('vlastník')",
-            "a:has-text('Vlastník')",
-            "label:has-text('vlastník')",
-            "button:has-text('vlastník')",
-            "button:has-text('Vlastník')",
-        ]:
-            try:
-                loc = page.locator(locator_expr).first
-                if loc.count() > 0 or page.locator(locator_expr).count() > 0:
-                    log.info("Klikám na: %s", locator_expr)
-                    page.locator(locator_expr).first.click()
-                    page.wait_for_load_state("networkidle")
-                    time.sleep(DELAY)
-                    vlastnik_clicked = True
-                    break
-            except Exception:
-                continue
-
-        if not vlastnik_clicked:
-            log.warning("Výber vlastník/správca nenájdený — pokračujem bez kliknutia")
+        # --- Krok 1: Klik na "vlastník" len ak Okres dropdown ešte neexistuje ---
+        okres_exists = page.locator("select#DropDownList_okres").count() > 0
+        if not okres_exists:
+            log.info("Okres dropdown chýba — hľadám výber vlastník/správca...")
+            for locator_expr in [
+                "a:has-text('vlastník')",
+                "a:has-text('Vlastník')",
+                "button:has-text('vlastník')",
+                "input[type=radio][value*='vlastn' i]",
+            ]:
+                try:
+                    if page.locator(locator_expr).count() > 0:
+                        log.info("Klikám na: %s", locator_expr)
+                        page.locator(locator_expr).first.click(timeout=5000)
+                        page.wait_for_load_state("networkidle")
+                        time.sleep(DELAY)
+                        break
+                except Exception:
+                    continue
+        else:
+            log.info("Okres dropdown už existuje — preskakujem výber vlastníka")
 
         # --- Krok 2: Nájsť selektory formulára ---
         log.info("Hľadám polia formulára...")
