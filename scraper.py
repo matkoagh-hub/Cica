@@ -18,13 +18,31 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-try:
-    from playwright_stealth import stealth_sync
-except ImportError:
+# playwright-stealth má rôzne API podľa verzie
+def _apply_stealth(page):
+    """Aplikuje stealth patches na page; toleruje rôzne verzie knižnice."""
     try:
-        from playwright_stealth import stealth as stealth_sync
-    except ImportError:
-        stealth_sync = lambda page: None  # fallback ak knižnica nemá stealth
+        # v2+: trieda Stealth
+        from playwright_stealth import Stealth
+        Stealth().apply_stealth_sync(page)
+        return
+    except Exception:
+        pass
+    try:
+        # v1.x: stealth_sync funkcia
+        from playwright_stealth import stealth_sync
+        stealth_sync(page)
+        return
+    except Exception:
+        pass
+    try:
+        # v2+ alternatíva
+        from playwright_stealth.sync import stealth_sync
+        stealth_sync(page)
+        return
+    except Exception:
+        pass
+    log.warning("playwright-stealth nedostupný — pokračujem bez stealth")
 
 BASE_URL = "https://cica.vugk.sk/VL_vyber.aspx"
 DB_PATH = "owners.db"
@@ -174,7 +192,7 @@ def run_scraper():
             timezone_id="Europe/Bratislava",
         )
         page = context.new_page()
-        stealth_sync(page)  # maskuje Playwright pred botdetekciou
+        _apply_stealth(page)  # maskuje Playwright pred botdetekciou
         page.set_default_timeout(20000)
 
         log.info("Otváram stránku: %s", BASE_URL)
