@@ -133,20 +133,42 @@ def get_select_options(page, selector):
         return []
 
 
-def select_and_wait(page, selector, value):
-    """Vyberie hodnotu v selecte a počká na sieťový kľud (postback)."""
+def select_and_wait(page, selector, value, expect_child_selector=None):
+    """
+    Vyberie hodnotu v selecte. Podporuje:
+    - AJAX postback (čakáme na networkidle)
+    - Full page reload (čakáme na load)
+    - Čakanie kým child dropdown sa naplní
+    """
     page.select_option(selector, value)
+
+    # Pokus o explicitné dispatchnutie change eventu
     try:
-        page.wait_for_load_state("networkidle", timeout=15000)
+        page.dispatch_event(selector, "change")
+    except Exception:
+        pass
+
+    # Čakaj buď na navigation alebo na networkidle
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
     except PlaywrightTimeout:
         pass
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except PlaywrightTimeout:
+        pass
+
     time.sleep(DELAY)
+
+    # Ak vieme aký child selector sa má naplniť, počkajme na to
+    if expect_child_selector:
+        wait_for_options(page, expect_child_selector, timeout=10000)
 
 
 def wait_for_options(page, selector, timeout=10000):
     """Počká kým daný select dropdown má aspoň jednu reálnu (non-empty) možnosť."""
     if not selector:
-        return
+        return False
     try:
         page.wait_for_function(
             """([sel]) => {
@@ -157,8 +179,31 @@ def wait_for_options(page, selector, timeout=10000):
             arg=[selector],
             timeout=timeout,
         )
+        return True
     except PlaywrightTimeout:
         log.warning("Timeout pri čakaní na možnosti v %s", selector)
+        return False
+
+
+def debug_dropdown(page, selector, label):
+    """Vypíše obsah dropdownu pre diagnostiku."""
+    if not selector:
+        log.info("DEBUG %s: selector=None", label)
+        return
+    try:
+        info = page.eval_on_selector(
+            selector,
+            """sel => ({
+                exists: !!sel,
+                disabled: sel.disabled,
+                optionCount: sel.options.length,
+                nonEmpty: Array.from(sel.options).filter(o => o.value.trim() !== '').length,
+                first3: Array.from(sel.options).slice(0, 3).map(o => o.text.trim())
+            })"""
+        )
+        log.info("DEBUG %s [%s]: %s", label, selector, info)
+    except Exception as e:
+        log.info("DEBUG %s [%s]: nedá sa prečítať (%s)", label, selector, e)
 
 
 def get_input_value(page, selector):
@@ -368,7 +413,15 @@ def run_scraper():
                      okresy[0][1] if okresy else "?", len(okresy))
             for i_okres, (okres_val, okres_name) in enumerate(okresy, 1):
                 log.info("=== OKRES [%d/%d]: %s ===", i_okres, len(okresy), okres_name)
-                select_and_wait(page, sel_okres, okres_val)
+
+                # Identifikuj kat_sel ešte pred zmenou aby sme naň mohli čakať
+                kat_sel_pre = find_selector(page, [
+                    "select[name*='Katastr' i]", "select[id*='Katastr' i]",
+                    "select[name*='Uzem' i]", "select[id*='Uzem' i]",
+                ]) or sel_kat
+
+                select_and_wait(page, sel_okres, okres_val,
+                                expect_child_selector=kat_sel_pre)
 
                 kat_sel = find_selector(page, [
                     "select[name*='Katastr' i]", "select[id*='Katastr' i]",
@@ -378,6 +431,7 @@ def run_scraper():
                     log.warning("  Nenašiel som dropdown kat. územia")
                     continue
 
+                debug_dropdown(page, kat_sel, "kat_uzemie po výbere okresu")
                 wait_for_options(page, kat_sel)
                 katy = get_select_options(page, kat_sel)
                 log.info("  Nájdených %d katastrálnych území", len(katy))
